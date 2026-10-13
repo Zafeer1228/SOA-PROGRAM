@@ -1,0 +1,506 @@
+Let's make a **simple Spring Boot Role-Based Authentication project** with **ADMIN and USER roles**, and CRUD operations:
+
+* **ADMIN** → Save, Delete, Get All
+* **USER** → Get All only
+* **Not logged in** → Cannot access APIs
+
+We will use **Spring Boot + Spring Security + JPA + PostgreSQL**, without JWT, so the concept is easy to understand.
+
+### 1. Project structure
+
+```text
+role-based-crud
+│
+├── controller
+│   ├── ProductController.java
+│   └── AuthController.java
+│
+├── entity
+│   └── Product.java
+│
+├── repository
+│   └── ProductRepository.java
+│
+├── service
+│   └── CustomUserDetailsService.java
+│
+├── config
+│   └── SecurityConfig.java
+│
+└── RoleBasedCrudApplication.java
+```
+
+---
+
+# 2. Product Entity
+
+```java
+@Entity
+public class Product {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String name;
+    private double price;
+
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public double getPrice() {
+        return price;
+    }
+
+    public void setPrice(double price) {
+        this.price = price;
+    }
+}
+```
+
+---
+
+# 3. Repository
+
+```java
+public interface ProductRepository 
+        extends JpaRepository<Product, Long> {
+
+}
+```
+
+Because we extend `JpaRepository`, we automatically get:
+
+```text
+save()
+findAll()
+findById()
+deleteById()
+```
+
+So we don't have to write SQL for these basic operations.
+
+---
+
+# 4. Controller
+
+```java
+@RestController
+@RequestMapping("/products")
+public class ProductController {
+
+    @Autowired
+    private ProductRepository repository;
+
+
+    // ADMIN can save
+    @PostMapping
+    public Product save(@RequestBody Product product) {
+
+        return repository.save(product);
+    }
+
+
+    // ADMIN and USER can get all
+    @GetMapping
+    public List<Product> getAll() {
+
+        return repository.findAll();
+    }
+
+
+    // ADMIN can delete
+    @DeleteMapping("/{id}")
+    public String delete(@PathVariable Long id) {
+
+        repository.deleteById(id);
+
+        return "Product deleted successfully";
+    }
+}
+```
+
+At this point we have:
+
+```text
+POST    /products       → Save
+GET     /products       → Get All
+DELETE  /products/1     → Delete
+```
+
+But currently **any logged-in user could potentially access them**.
+
+Now we add role-based security.
+
+---
+
+# 5. Security Configuration
+
+```java
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http)
+            throws Exception {
+
+        http
+            .csrf(csrf -> csrf.disable())
+
+            .authorizeHttpRequests(auth -> auth
+
+                // ADMIN only
+                .requestMatchers(HttpMethod.POST, "/products")
+                .hasRole("ADMIN")
+
+                // ADMIN only
+                .requestMatchers(HttpMethod.DELETE, "/products/**")
+                .hasRole("ADMIN")
+
+                // ADMIN + USER
+                .requestMatchers(HttpMethod.GET, "/products")
+                .hasAnyRole("ADMIN", "USER")
+
+                // Everything else requires login
+                .anyRequest()
+                .authenticated()
+            )
+
+            .httpBasic(Customizer.withDefaults());
+
+        return http.build();
+    }
+}
+```
+
+This is the most important part.
+
+### POST
+
+```java
+.requestMatchers(HttpMethod.POST, "/products")
+.hasRole("ADMIN")
+```
+
+Means:
+
+```text
+POST /products
+       ↓
+Is user ADMIN?
+       ↓
+Yes → ✅ Allow
+No  → ❌ 403 Forbidden
+```
+
+### DELETE
+
+```java
+.requestMatchers(HttpMethod.DELETE, "/products/**")
+.hasRole("ADMIN")
+```
+
+Means only ADMIN can delete.
+
+### GET
+
+```java
+.requestMatchers(HttpMethod.GET, "/products")
+.hasAnyRole("ADMIN", "USER")
+```
+
+Means both ADMIN and USER can get all products.
+
+---
+
+# 6. Where do username and roles come from?
+
+For a **simple learning example**, we can initially configure users directly in Spring Security.
+
+```java
+@Bean
+public UserDetailsService userDetailsService() {
+
+    UserDetails admin = User
+            .withUsername("admin")
+            .password("{noop}1234")
+            .roles("ADMIN")
+            .build();
+
+    UserDetails user = User
+            .withUsername("student")
+            .password("{noop}1234")
+            .roles("USER")
+            .build();
+
+    return new InMemoryUserDetailsManager(admin, user);
+}
+```
+
+Add this method inside `SecurityConfig`.
+
+So we have:
+
+```text
+admin / 1234 / ADMIN
+
+student / 1234 / USER
+```
+
+`{noop}` is only for this simple demonstration. **Don't use plaintext passwords like this in a real application.**
+
+---
+
+# 7. Complete SecurityConfig
+
+```java
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http)
+            throws Exception {
+
+        http
+            .csrf(csrf -> csrf.disable())
+
+            .authorizeHttpRequests(auth -> auth
+
+                .requestMatchers(HttpMethod.POST, "/products")
+                .hasRole("ADMIN")
+
+                .requestMatchers(HttpMethod.DELETE, "/products/**")
+                .hasRole("ADMIN")
+
+                .requestMatchers(HttpMethod.GET, "/products")
+                .hasAnyRole("ADMIN", "USER")
+
+                .anyRequest()
+                .authenticated()
+            )
+
+            .httpBasic(Customizer.withDefaults());
+
+        return http.build();
+    }
+
+
+    @Bean
+    public UserDetailsService userDetailsService() {
+
+        UserDetails admin = User
+                .withUsername("admin")
+                .password("{noop}1234")
+                .roles("ADMIN")
+                .build();
+
+        UserDetails student = User
+                .withUsername("student")
+                .password("{noop}1234")
+                .roles("USER")
+                .build();
+
+        return new InMemoryUserDetailsManager(admin, student);
+    }
+}
+```
+
+---
+
+# 8. Test using Postman
+
+### Save Product
+
+Method:
+
+```text
+POST
+http://localhost:8080/products
+```
+
+Authorization → **Basic Auth**
+
+```text
+Username: admin
+Password: 1234
+```
+
+Body → JSON:
+
+```json
+{
+    "name": "Laptop",
+    "price": 55000
+}
+```
+
+Result:
+
+```json
+{
+    "id": 1,
+    "name": "Laptop",
+    "price": 55000
+}
+```
+
+Because:
+
+```text
+admin → ADMIN → POST allowed
+```
+
+---
+
+### Student tries to save
+
+```text
+Username: student
+Password: 1234
+```
+
+Request:
+
+```text
+POST /products
+```
+
+Result:
+
+```text
+403 Forbidden
+```
+
+Because:
+
+```text
+student
+   ↓
+USER
+   ↓
+POST requires ADMIN
+   ↓
+❌ Access Denied
+```
+
+---
+
+# 9. Get All Products
+
+Request:
+
+```text
+GET
+http://localhost:8080/products
+```
+
+Admin:
+
+```text
+admin / 1234
+```
+
+✅ Allowed.
+
+Student:
+
+```text
+student / 1234
+```
+
+✅ Allowed.
+
+Response:
+
+```json
+[
+    {
+        "id": 1,
+        "name": "Laptop",
+        "price": 55000
+    },
+    {
+        "id": 2,
+        "name": "Mobile",
+        "price": 25000
+    }
+]
+```
+
+---
+
+# 10. Delete Product
+
+Request:
+
+```text
+DELETE
+http://localhost:8080/products/1
+```
+
+Admin:
+
+```text
+admin / 1234
+```
+
+✅ Allowed.
+
+Student:
+
+```text
+student / 1234
+```
+
+❌ `403 Forbidden`
+
+---
+
+# 11. Complete flow
+
+```text
+                    Client / Postman
+                           |
+                           ↓
+                    Spring Security
+                           |
+                    Check username
+                           |
+                    Check password
+                           |
+                           ↓
+                       Get Role
+                     /           \
+                    /             \
+               ADMIN              USER
+                 |                  |
+          ┌──────┴──────┐           |
+          ↓             ↓           ↓
+        SAVE          DELETE      GET ALL
+         ✅             ✅          ✅
+```
+
+### Final permission table
+
+| Operation | URL                     | ADMIN | USER |
+| --------- | ----------------------- | ----: | ---: |
+| Save      | `POST /products`        |     ✅ |    ❌ |
+| Get All   | `GET /products`         |     ✅ |    ✅ |
+| Delete    | `DELETE /products/{id}` |     ✅ |    ❌ |
+
+**Important:** This example uses **HTTP Basic + in-memory users** to make the role concept easy. The next step would be replacing `InMemoryUserDetailsManager` with **PostgreSQL users**, where Spring Security gets `username`, encrypted `password`, and `role` from the database.
